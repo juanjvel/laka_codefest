@@ -93,7 +93,7 @@ class CodefestExtractor:
                 images = convert_from_path(full_path)
                 texto_ocr = []
                 for img in images:
-                    texto_ocr.append(pytesseract.image_to_string(img))
+                    texto_ocr.append(pytesseract.image_to_string(img, lang='spa+eng'))
                 texto_crudo = "\n".join(texto_ocr)
             except Exception as e:
                 print(f"Error en OCR para {full_path}: {e}")
@@ -136,33 +136,30 @@ class CodefestExtractor:
             print(f"Error procesando JSON {full_path}: {e}")
             return "", {}
 
+    @staticmethod
+    def _leer_csv_robusto(full_path):
+        """
+        Detecta separador (coma, ; o tab) automáticamente para cada encoding candidato,
+        en vez de reintentar separadores asumiendo siempre utf-8 (lo que podía fallar
+        de nuevo por encoding y quedarse con un resultado de una sola columna en silencio).
+        """
+        for encoding in ('utf-8', 'latin-1'):
+            try:
+                df = pd.read_csv(full_path, encoding=encoding, sep=None, engine='python')
+                if len(df.columns) > 1:
+                    return df
+            except Exception:
+                continue
+        # Último recurso: lo que se pueda leer, aunque quede en una sola columna
+        return pd.read_csv(full_path, encoding='latin-1', engine='python')
+
     def extract_tabular(self, relative_path, is_csv=True):
-        """Extrae tabulares incluyendo soporte dual para CSVs con punto y coma y tabulaciones."""
+        """Extrae tabulares con detección automática de separador y codificación (CSV) o Excel."""
         full_path = os.path.join(self.base_dir, relative_path)
         texto_crudo = ""
         try:
             if is_csv:
-                # --- MEJORA: Manejo de delimitadores y codificaciones ---
-                try:
-                    df = pd.read_csv(full_path, encoding='utf-8')
-                except UnicodeDecodeError:
-                    df = pd.read_csv(full_path, encoding='latin-1')
-                except Exception:
-                    try:
-                        # Intento con punto y coma
-                        df = pd.read_csv(full_path, encoding='utf-8', sep=';')
-                    except Exception:
-                        # Intento con tabulación (Solución exacta para el AIINDEX)
-                        df = pd.read_csv(full_path, encoding='utf-8', sep='\t')
-                
-                # Si se leyó todo como una columna gigante, forzamos separadores alternativos
-                if len(df.columns) == 1:
-                    try:
-                        df = pd.read_csv(full_path, encoding='utf-8', sep=';')
-                        if len(df.columns) == 1:
-                            df = pd.read_csv(full_path, encoding='utf-8', sep='\t')
-                    except Exception:
-                        pass
+                df = self._leer_csv_robusto(full_path)
             else:
                 df = pd.read_excel(full_path)
 
@@ -191,8 +188,9 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
     extractor = CodefestExtractor(base_corpus_dir)
     cleaner = CodefestTextCleaner()
     base_documental = []
-    pendientes = []  
-    
+    pendientes = []
+    catalogos_ignorados_reales = []  # se llena con lo que realmente se encuentra, no un tamaño fijo
+
     # --- MEJORA: Ignorar los catálogos que no contienen texto ---
     catalogos_a_ignorar = ['DAIO_catalog-2.json', 'RUTAN_catalog-2.json', 'DEFENSA21_catalog-2.json', 'DEFENSA21_articulos-2.json']
 
@@ -203,6 +201,7 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
         tipo = str(row['Tipo']).lower()
         
         if nombre_archivo in catalogos_a_ignorar:
+            catalogos_ignorados_reales.append(doc_id)
             print(f"Ignorando catálogo de metadatos: {nombre_archivo}")
             continue
 
@@ -254,7 +253,7 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
             for p in pendientes:
                 f.write(json.dumps(p, ensure_ascii=False) + "\n")
 
-    _validar_conteo_total(excel_indice_path, len(base_documental) + len(catalogos_a_ignorar), len(pendientes))
+    _validar_conteo_total(excel_indice_path, len(base_documental) + len(catalogos_ignorados_reales), len(pendientes))
 
     return base_documental, pendientes
 
@@ -272,7 +271,11 @@ def _validar_conteo_total(excel_indice_path, n_procesados, n_pendientes):
 
 
 # Bloque de ejecución principal
-docs_limpios, pendientes = ejecutar_pipeline_extraccion(
-      excel_indice_path="../data/raw/Indice_Datos_Codefest.xlsx",
-      base_corpus_dir="../data/raw/",
-      output_jsonl_path="../data/clean/f1_documentos.jsonl" )
+if __name__ == "__main__":
+    # NOTA: confirma que Indice_Datos_Codefest.xlsx vive realmente en data/raw/
+    # (no aparecía en el árbol de directorios compartido) antes de correr esto.
+    docs_limpios, pendientes = ejecutar_pipeline_extraccion(
+        excel_indice_path="../data/raw/Indice_Datos_Codefest.xlsx",
+        base_corpus_dir="../data/raw/",
+        output_jsonl_path="../data/clean/f1_documentos.jsonl"
+    )
