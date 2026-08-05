@@ -5,3 +5,10 @@ data/raw/F3_Dinamicas_Territoriales/
 
 data/clean/f1_documentos.jsonl
 *.zip
+
+.venv/
+
+__pycache__/
+*.pyc
+
+CLAUDE.md
