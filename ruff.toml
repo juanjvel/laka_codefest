@@ -1,0 +1,18 @@
+# Config mínima de ruff para el CI (ver .github/workflows/ci.yml).
+# Sin esto, ruff activa por defecto un set de reglas mucho más amplio
+# (bugbear, refurb, bandit, isort...) que generaría falsos positivos
+# sobre patrones ya existentes en el repo. Fijamos el set "clásico"
+# (pycodestyle E/W + pyflakes F) hasta que el equipo decida ampliarlo.
+target-version = "py312"
+# El código existente (docstrings, prints y f-strings en español) usa
+# líneas más largas que el default de 88; 140 cubre la línea más larga
+# actual sin forzar un reflow del código de negocio en esta PR de CI.
+line-length = 140
+
+[lint]
+select = ["E", "W", "F"]
+# Ruido preexistente en f1_/f2_limpieza_extraccion.py que no se toca en
+# esta PR de CI (variable `l` en comprehensions, espacios en líneas
+# vacías): se ignora para que el linter no bloquee sobre código ya
+# existente. Nuevo código sí debería evitar estos patrones.
+ignore = ["E741", "W291", "W293"]
