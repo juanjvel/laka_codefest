@@ -1,0 +1,7 @@
+##i# Datos locales pesados
+data/raw/F1_IA_y_Capacidades_Estrategicas/
+data/raw/F2_Seguridad_Entorno_Espacial/
+data/raw/F3_Dinamicas_Territoriales/
+
+data/clean/f1_documentos.jsonl
+*.zip
