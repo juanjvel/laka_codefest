@@ -8,4 +8,7 @@ data/clean/f1_documentos.jsonl
 
 .venv/
 
+__pycache__/
+*.pyc
+
 CLAUDE.md
