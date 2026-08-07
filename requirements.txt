@@ -1,0 +1,9 @@
+pdfplumber
+pytesseract
+Pillow
+pandas
+openpyxl
+beautifulsoup4
+mapbox-vector-tile
+langdetect
+tqdm
