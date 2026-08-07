@@ -223,6 +223,35 @@ class CodefestExtractor:
             print(f"Error procesando Imagen {full_path}: {e}")
             return "", {}
 
+    def extract_catalogo(self, relative_path, es_csv):
+        """Catálogos de scraping (CSIS_catalog-2.csv/.json): manifiestos con URLs y metadata de
+        descarga sobre PDFs que ni siquiera están en el corpus, no contenido documental propio. En vez
+        de indexar todas las columnas de control (scraped_at, status, size_bytes, dest...) — que no
+        aportan señal semántica para retrieval — se reduce cada registro a un resumen mínimo con las
+        únicas columnas con algo de valor semántico: título, año, URL de la página fuente."""
+        full_path = os.path.join(self.base_dir, relative_path)
+        try:
+            if es_csv:
+                df = pd.read_csv(full_path, encoding='utf-8')
+                registros = df.to_dict(orient='records')
+            else:
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    registros = json.load(f)
+                if not isinstance(registros, list):
+                    registros = [registros]
+
+            lineas = []
+            for reg in registros:
+                titulo = reg.get('titulo', '')
+                anio = reg.get('año', reg.get('anio', ''))
+                url = reg.get('page_url', '')
+                if titulo or url:
+                    lineas.append(f"titulo: {titulo} | año: {anio} | page_url: {url}")
+            return "\n".join(lineas), {}
+        except Exception as e:
+            print(f"Error procesando catálogo {full_path}: {e}")
+            return "", {}
+
 
 def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_jsonl_path):
     df_inventario = pd.read_excel(excel_indice_path, sheet_name='Inventario de Archivos')
@@ -234,10 +263,11 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
     base_documental = []
     pendientes = []
 
-    # --- Ignorar los catálogos que no contienen texto ---
-    # CSIS_catalog-2.{json,csv}: manifiesto de scraping (URLs y metadatos de descarga), sin contenido
-    # documental propio — mismo caso que los catálogos ignorados en el pipeline de F1.
-    catalogos_a_ignorar = ['CSIS_catalog-2.json', 'CSIS_catalog-2.csv']
+    # --- Catálogos de scraping: no tienen contenido documental propio, solo metadata sobre PDFs que
+    # ni siquiera están en el corpus. En vez de descartarlos, se procesan con extract_catalogo() para
+    # obtener un resumen mínimo (titulo/año/page_url) — mismos archivos que F1 habría ignorado, pero
+    # aquí sí se indexan (a decisión explícita, ver f2-pipeline-implementation memory).
+    catalogos_de_metadata = ['CSIS_catalog-2.json', 'CSIS_catalog-2.csv']
 
     for _, row in df_f2.iterrows():
         doc_id = str(row['DOC_ID'])
@@ -245,15 +275,13 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
         carpeta = str(row['Carpeta'])
         tipo = str(row['Tipo']).lower()
 
-        if nombre_archivo in catalogos_a_ignorar:
-            print(f"Ignorando catálogo de metadatos: {nombre_archivo}")
-            continue
-
         relative_path = os.path.join(carpeta, nombre_archivo)
         texto_crudo = ""
         metadata_extra = {}
 
-        if tipo == 'pdf':
+        if nombre_archivo in catalogos_de_metadata:
+            texto_crudo, metadata_extra = extractor.extract_catalogo(relative_path, es_csv=(tipo == 'csv'))
+        elif tipo == 'pdf':
             texto_crudo, metadata_extra = extractor.extract_pdf(relative_path)
         elif tipo == 'json':
             texto_crudo, metadata_extra = extractor.extract_json(relative_path)
@@ -301,7 +329,7 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
             for p in pendientes:
                 f.write(json.dumps(p, ensure_ascii=False) + "\n")
 
-    _validar_conteo_total(excel_indice_path, len(base_documental) + len(catalogos_a_ignorar), len(pendientes))
+    _validar_conteo_total(excel_indice_path, len(base_documental), len(pendientes))
 
     return base_documental, pendientes
 
