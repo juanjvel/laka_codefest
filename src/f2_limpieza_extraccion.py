@@ -50,11 +50,23 @@ FENOMENO_OBJETIVO = "F2"
 
 class CodefestTextCleaner:
     @staticmethod
+    def reparar_guion_fin_linea(texto):
+        """Repara palabras cortadas por guion de fin de línea (ej. 'coopera-\\nción' -> 'cooperación').
+        Debe aplicarse mientras el salto de línea original todavía esté presente — una vez que un
+        extractor colapsa ese salto a un espacio (p.ej. al unir las líneas envueltas de un bloque de
+        PDF), el patrón ya no es detectable."""
+        return re.sub(r'-\n(?=\w)', '', texto)
+
+    @staticmethod
     def clean_text(raw_text):
-        """Normaliza espacios/control chars y repara palabras cortadas por guion de fin de línea."""
-        texto = re.sub(r'-\n(?=\w)', '', raw_text)
-        texto = re.sub(r'\s+', ' ', texto)
-        return texto.strip()
+        """Normaliza espacios/tabs dentro de cada línea, pero preserva los saltos de línea recibidos
+        como separadores de párrafo (uno por párrafo/registro, según el extractor de origen) en vez de
+        colapsar todo el texto a una sola línea. Esto es lo que permite que las etapas de chunking
+        posteriores usen párrafos como frontera natural, además de oraciones."""
+        texto = CodefestTextCleaner.reparar_guion_fin_linea(raw_text)
+        texto = re.sub(r'[ \t\r\f\v]+', ' ', texto)
+        parrafos = [p.strip() for p in texto.split('\n') if p.strip()]
+        return '\n'.join(parrafos)
 
     @staticmethod
     def eliminar_cabeceras_pies(paginas_texto, min_repeticiones=3):
@@ -91,13 +103,32 @@ class CodefestExtractor:
         self.base_dir = base_corpus_dir
 
     def extract_pdf(self, relative_path):
-        """Extrae texto de PDFs. Si el texto está vacío (escaneado), aplica OCR como fallback."""
+        """Extrae texto de PDFs agrupando por bloques de layout ("blocks") en vez de por línea visual
+        plana ("text"). PyMuPDF en modo "text" numera una línea por cada línea envuelta por el ancho de
+        columna, sin distinguir un salto de línea real de fin de párrafo de uno de simple ajuste de texto
+        — con ese modo, toda noción de párrafo se pierde antes de llegar a clean_text(). El modo "blocks"
+        agrupa las líneas que pertenecen a un mismo bloque de layout (aproximación robusta a un párrafo
+        en la mayoría de reportes con una o dos columnas), preservando esa frontera como un solo salto de
+        línea por bloque. Si el texto está vacío (escaneado), aplica OCR como fallback."""
         full_path = os.path.join(self.base_dir, relative_path)
         paginas = []
         try:
             doc = fitz.open(full_path)
             for page in doc:
-                paginas.append(page.get_text("text"))
+                bloques = page.get_text("blocks", sort=True)
+                parrafos_pagina = []
+                for bloque in bloques:
+                    texto_bloque, tipo_bloque = bloque[4], bloque[6]
+                    if tipo_bloque != 0:
+                        continue  # 1 = bloque de imagen; solo interesa el texto (tipo 0).
+                    # Reparar guiones de fin de línea *antes* de aplanar las líneas envueltas del
+                    # bloque a un espacio — una vez aplanadas, el salto de línea que delataba el
+                    # corte ya no existe (ver CodefestTextCleaner.reparar_guion_fin_linea).
+                    texto_bloque = CodefestTextCleaner.reparar_guion_fin_linea(texto_bloque)
+                    parrafo = " ".join(l.strip() for l in texto_bloque.split("\n") if l.strip())
+                    if parrafo:
+                        parrafos_pagina.append(parrafo)
+                paginas.append("\n".join(parrafos_pagina))
             doc.close()
         except Exception as e:
             print(f"Error procesando PDF {full_path}: {e}")
