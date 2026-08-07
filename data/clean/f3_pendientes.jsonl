@@ -1,0 +1,9 @@
+{"doc_id": "F3-Amazon_Underworld-AMAZONUW_tiles-index.json", "fuente": "Amazon_Underworld", "formato": "JSON", "fenomeno": "F3", "motivo": "bulk_dump_json", "detalle": "raíz es una lista con 262 registros"}
+{"doc_id": "F3-CEOBS-CEOBS_catalog-2.json", "fuente": "CEOBS", "formato": "JSON", "fenomeno": "F3", "motivo": "catalogo_excluido", "detalle": "nombre coincide con patrón de catálogo/registro de metadata"}
+{"doc_id": "F3-MAPP_OEA-MAPPOEA_mapp-catalog.csv", "fuente": "MAPP_OEA", "formato": "CSV", "fenomeno": "F3", "motivo": "catalogo_excluido", "detalle": "nombre coincide con patrón de catálogo/registro de metadata"}
+{"doc_id": "F3-MAPP_OEA-MAPPOEA_mapp-catalog.json", "fuente": "MAPP_OEA", "formato": "JSON", "fenomeno": "F3", "motivo": "catalogo_excluido", "detalle": "nombre coincide con patrón de catálogo/registro de metadata"}
+{"doc_id": "F3-RESDAL-RESDAL_catalog-2.csv", "fuente": "RESDAL", "formato": "CSV", "fenomeno": "F3", "motivo": "catalogo_excluido", "detalle": "nombre coincide con patrón de catálogo/registro de metadata"}
+{"doc_id": "F3-RESDAL-RESDAL_catalog-2.json", "fuente": "RESDAL", "formato": "JSON", "fenomeno": "F3", "motivo": "catalogo_excluido", "detalle": "nombre coincide con patrón de catálogo/registro de metadata"}
+{"doc_id": "F3-SIPRI-SIPRI_22136.pdf", "fuente": "SIPRI", "formato": "PDF", "fenomeno": "F3", "motivo": "error_extraccion", "detalle": "PDFSyntaxError: No /Root object! - Is this really a PDF?"}
+{"doc_id": "F3-SIPRI-SIPRI_catalog-2.json", "fuente": "SIPRI", "formato": "JSON", "fenomeno": "F3", "motivo": "catalogo_excluido", "detalle": "nombre coincide con patrón de catálogo/registro de metadata"}
+{"doc_id": "F3-SIPRI-SIPRI_hsrc20lmip20report20320growth20employment20and20skills-1.pdf", "fuente": "SIPRI", "formato": "PDF", "fenomeno": "F3", "motivo": "error_extraccion", "detalle": "PDFSyntaxError: No /Root object! - Is this really a PDF?"}

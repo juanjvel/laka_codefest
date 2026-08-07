@@ -1,0 +1,21 @@
+# Extracción y limpieza de corpus CODEFEST AD ASTRA 2026 (F1/F2/F3) — Etapa 1.
+# Solo lo que src/extraccion.py importa realmente. NO instalar torch/sentence-transformers/
+# faiss-cpu todavía (ver requirements-embeddings.txt): no se necesitan en esta etapa y
+# consumen memoria/tiempo de instalación que no aporta nada a la extracción.
+
+openpyxl==3.1.5          # lectura de Indice_Datos_Codefest.xlsx (todas las hojas) y de .xlsx del corpus
+pdfplumber==0.11.4       # extracción de texto por página desde PDF
+pytesseract==0.3.13      # OCR de respaldo para PDF escaneado e imágenes (.jpg)
+pdf2image==1.17.0        # renderiza páginas de PDF a imagen para pasarlas a OCR
+Pillow==11.0.0           # manejo de imágenes (requerido por pytesseract/pdf2image)
+chardet==5.2.0           # detección de encoding en archivos CSV/TXT
+blackboxprotobuf==1.0.1  # decodificación de vector tiles .pbf (F3, Amazon_Underworld) sin esquema fijo,
+                         # preservando bytes crudos en vez de forzar validación UTF-8 estricta.
+                         # Reemplaza a mapbox-vector-tile: esa librería corrompía los acentos de los
+                         # string_value (mojibake) aunque los bytes del .pbf ya vienen en UTF-8 válido.
+langdetect==1.0.9        # detección de idioma para el campo idioma_detectado
+psutil==6.1.0            # chequeo de RAM del sistema antes de cada documento (control de memoria en Windows,
+                         # donde el módulo resource de Unix no está disponible)
+
+# Nota: pytesseract requiere el binario de Tesseract OCR instalado en el sistema
+# (no se instala vía pip). pdf2image requiere el binario de Poppler en el PATH.
