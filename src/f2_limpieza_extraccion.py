@@ -354,11 +354,9 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
             f.write(json.dumps(doc, ensure_ascii=False) + "\n")
 
     if pendientes:
-        print(f"ATENCIÓN: {len(pendientes)} documentos no se procesaron.")
-        pendientes_path = output_jsonl_path.replace(".jsonl", "_pendientes.jsonl")
-        with open(pendientes_path, 'w', encoding='utf-8') as f:
-            for p in pendientes:
-                f.write(json.dumps(p, ensure_ascii=False) + "\n")
+        print(f"ATENCIÓN: {len(pendientes)} documentos no se procesaron:")
+        for p in pendientes:
+            print(f"  - doc_id={p['doc_id']} tipo={p['tipo']} motivo={p['motivo']}")
 
     _validar_conteo_total(excel_indice_path, len(base_documental), len(pendientes))
 
