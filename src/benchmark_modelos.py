@@ -1,6 +1,8 @@
 import json
+import re
 import time
 import os
+from difflib import SequenceMatcher
 import pandas as pd
 import numpy as np
 import faiss
@@ -156,41 +158,149 @@ def preparar_base_conocimiento(archivos_jsonl):
 # =====================================================================
 # 3. CARGA DE GROUND TRUTH
 # =====================================================================
-def cargar_ground_truth_excel(ruta_excel):
+def normalizar_nombre(nombre):
+    """Normaliza un nombre de archivo para poder compararlo entre esquemas
+    distintos (el DOCUMENTO del ground truth vs. el Nombre estandarizado
+    del índice maestro): minúsculas, sin extensión, sin separadores."""
+    nombre = str(nombre).strip().lower()
+    nombre = re.sub(r'\.(pdf|json|csv|xlsx)$', '', nombre)
+    nombre = re.sub(r'[^a-z0-9]+', '-', nombre)
+    return nombre.strip('-')
+
+
+def construir_crosswalk_doc_id(ruta_indice_maestro):
+    """Construye un mapa nombre_de_archivo -> doc_id canónico a partir de la
+    hoja 'Inventario de Archivos' del índice maestro (Indice_Datos_Codefest.xlsx).
+    Esto es necesario porque el DOCUMENTO del ground truth NO usa el mismo
+    esquema de doc_id que genera este pipeline (ver diagnóstico: 'DOC-0296'
+    vs. el doc_id real 'F3-MAPPOEA-020')."""
+    import openpyxl
+    wb = openpyxl.load_workbook(ruta_indice_maestro, data_only=True, read_only=True)
+    ws = wb['Inventario de Archivos']
+    crosswalk_sin_prefijo = {}
+    crosswalk_completo = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        fenomeno, observatorio, codigo, doc_id, nombre_std, carpeta, tipo = row
+        if not nombre_std or not doc_id:
+            continue
+        crosswalk_completo[normalizar_nombre(nombre_std)] = doc_id
+        if codigo:
+            sin_prefijo = re.sub(rf'^{re.escape(codigo)}_', '', nombre_std, flags=re.IGNORECASE)
+            crosswalk_sin_prefijo[normalizar_nombre(sin_prefijo)] = doc_id
+    return crosswalk_sin_prefijo, crosswalk_completo
+
+
+def resolver_doc_id(celda_documento, crosswalk_sin_prefijo, crosswalk_completo):
+    """La celda DOCUMENTO trae el nombre de archivo y el id ad-hoc del anotador
+    separados por un salto de línea (p.ej. 'Informe-Semestral-36-MAPPOEA-1.pdf\\nDOC-0296-chunk-0052').
+    Solo el nombre de archivo es confiable para cruzar contra el índice maestro."""
+    if pd.isna(celda_documento):
+        return None
+    nombre_archivo = str(celda_documento).split('\n')[0].strip()
+    clave = normalizar_nombre(nombre_archivo)
+    return crosswalk_sin_prefijo.get(clave) or crosswalk_completo.get(clave)
+
+
+def detectar_fila_header(ruta_excel, hoja, max_filas_busqueda=10):
+    """Algunas hojas (p.ej. F1) tienen una fila de título antes del encabezado
+    real, lo que hace que pandas lea mal las columnas (Unnamed: 0, Unnamed: 1...).
+    Esto busca la fila donde realmente aparece 'PREGUNTA' y la usa como header."""
+    df_raw = pd.read_excel(ruta_excel, sheet_name=hoja, header=None, nrows=max_filas_busqueda)
+    for i, row in df_raw.iterrows():
+        valores = [str(v).strip().upper() for v in row if pd.notna(v)]
+        if 'PREGUNTA' in valores:
+            return i
+    return 0
+
+
+def cargar_ground_truth_excel(ruta_excel, ruta_indice_maestro):
     print(f"📖 Extrayendo Ground Truth desde: {ruta_excel}...")
     if not os.path.exists(ruta_excel):
         print(f"⚠️ Aviso: {ruta_excel} no encontrado.")
         return {}
+    if not os.path.exists(ruta_indice_maestro):
+        print(f"⚠️ Aviso: índice maestro {ruta_indice_maestro} no encontrado; no se podrán resolver doc_id.")
+        return {}
+
+    crosswalk_sin_prefijo, crosswalk_completo = construir_crosswalk_doc_id(ruta_indice_maestro)
+
     xls = pd.ExcelFile(ruta_excel)
     ground_truth_dict = {}
-    
+    total_docs_sin_resolver = 0
+
     for hoja in xls.sheet_names:
-        df = pd.read_excel(xls, sheet_name=hoja)
-        if 'PREGUNTA' in df.columns:
-            df_validas = df.dropna(subset=['PREGUNTA'])
-            agrupado = df_validas.groupby('PREGUNTA').agg({
-                'FRAGMENTO': lambda x: list(x.dropna().astype(str).unique()),
-                'DOCUMENTO': lambda x: list(x.dropna().astype(str).unique())
-            }).reset_index()
-            
-            for _, row in agrupado.iterrows():
-                pregunta_limpia = row['PREGUNTA'].strip()
-                ground_truth_dict[pregunta_limpia] = {
-                    "doc_ids_relevantes": row['DOCUMENTO'],
-                    "chunk_ids_relevantes": row['FRAGMENTO']
-                }
-    print(f"✅ Ground Truth cargado con éxito.")
+        fila_header = detectar_fila_header(ruta_excel, hoja)
+        df = pd.read_excel(xls, sheet_name=hoja, header=fila_header)
+
+        if 'PREGUNTA' not in df.columns:
+            print(f"   [AVISO] Hoja '{hoja}' no tiene columna PREGUNTA reconocible, se omite.")
+            continue
+
+        # Forward-fill: en el Excel original PREGUNTA es una celda combinada
+        # que cubre varias filas de evidencia (FRAGMENTO/DOCUMENTO distintos
+        # para la misma pregunta). Sin este paso, esas filas de continuación
+        # se pierden por completo al hacer dropna(subset=['PREGUNTA']).
+        df['PREGUNTA'] = df['PREGUNTA'].ffill()
+        df_validas = df.dropna(subset=['PREGUNTA'])
+
+        agrupado = df_validas.groupby('PREGUNTA').agg({
+            'FRAGMENTO': lambda x: list(x.dropna().astype(str).unique()),
+            'DOCUMENTO': lambda x: list(x.dropna().astype(str).unique())
+        }).reset_index()
+
+        for _, row in agrupado.iterrows():
+            pregunta_limpia = row['PREGUNTA'].strip()
+            doc_ids_resueltos = []
+            for celda in row['DOCUMENTO']:
+                resuelto = resolver_doc_id(celda, crosswalk_sin_prefijo, crosswalk_completo)
+                if resuelto:
+                    doc_ids_resueltos.append(resuelto)
+                else:
+                    total_docs_sin_resolver += 1
+                    print(f"   [AVISO] No se pudo resolver doc_id para: {celda.splitlines()[0]!r}")
+
+            ground_truth_dict[pregunta_limpia] = {
+                "doc_ids_relevantes": doc_ids_resueltos,
+                # Texto libre anotado a mano (columna FRAGMENTO), no chunk_id;
+                # calcular_ndcg_10 compara por solapamiento de texto, no por id.
+                "chunk_ids_relevantes": row['FRAGMENTO']
+            }
+        print(f"   [OK] Hoja '{hoja}': header detectado en fila {fila_header}, {len(agrupado)} preguntas cargadas.")
+
+    print(f"✅ Ground Truth cargado: {len(ground_truth_dict)} preguntas totales "
+          f"({total_docs_sin_resolver} referencias DOCUMENTO sin resolver).")
     return ground_truth_dict
 
 # =====================================================================
 # 4. FÓRMULAS DE EVALUACIÓN OFICIAL (Sección 10.2)
 # =====================================================================
-def calcular_ndcg_10(ranking_chunk_ids, chunks_relevantes):
-    relevantes = set(chunks_relevantes)
-    if not relevantes: return 0.0
-    top_10 = ranking_chunk_ids[:10]
-    dcg = sum(1.0 / np.log2(i + 2) for i, cid in enumerate(top_10) if cid in relevantes)
-    idcg = sum(1.0 / np.log2(i + 2) for i in range(min(len(relevantes), 10)))
+def _texto_normalizado(texto):
+    return re.sub(r'\s+', ' ', str(texto).lower()).strip()
+
+def _fragmento_coincide_con_chunk(fragmento_texto, chunk_texto, umbral=0.5):
+    """El ground truth marca relevancia con un excerto de texto libre (columna
+    FRAGMENTO) anotado a mano, no con nuestro chunk_id, así que la única forma
+    de saber si un chunk generado por el pipeline corresponde a ese excerto es
+    comparar el contenido: por inclusión directa, o por similitud de texto
+    cuando el corte de oraciones no coincide exactamente con el fragmento anotado."""
+    frag = _texto_normalizado(fragmento_texto)
+    chunk = _texto_normalizado(chunk_texto)
+    if not frag or not chunk:
+        return False
+    if frag in chunk or chunk in frag:
+        return True
+    return SequenceMatcher(None, frag, chunk).ratio() >= umbral
+
+def calcular_ndcg_10(ranking_chunk_textos, fragmentos_relevantes):
+    fragmentos_relevantes = [f for f in fragmentos_relevantes if _texto_normalizado(f)]
+    if not fragmentos_relevantes: return 0.0
+    top_10 = ranking_chunk_textos[:10]
+    dcg = sum(
+        1.0 / np.log2(i + 2)
+        for i, chunk_texto in enumerate(top_10)
+        if any(_fragmento_coincide_con_chunk(frag, chunk_texto) for frag in fragmentos_relevantes)
+    )
+    idcg = sum(1.0 / np.log2(i + 2) for i in range(min(len(fragmentos_relevantes), 10)))
     return dcg / idcg if idcg > 0 else 0.0
 
 def calcular_f1_3(ranking_doc_ids, doc_ids_relevantes):
@@ -209,17 +319,17 @@ def calcular_f1_3(ranking_doc_ids, doc_ids_relevantes):
 # =====================================================================
 # 5. PIPELINE DE EVALUACIÓN DE LOS 6 MODELOS SOLICITADOS
 # =====================================================================
-def ejecutar_benchmark_6_modelos(archivos_jsonl, ruta_excel_gt):
+def ejecutar_benchmark_6_modelos(archivos_jsonl, ruta_excel_gt, ruta_indice_maestro):
     # Los 6 modelos exactos solicitados
     modelos = [
         {"nombre": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", "prefijo_q": "", "prefijo_p": ""},
         {"nombre": "intfloat/multilingual-e5-small", "prefijo_q": "query: ", "prefijo_p": "passage: "},
         {"nombre": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2", "prefijo_q": "", "prefijo_p": ""},
-        {"nombre": "BAAI/bge-multilingual-base-v1.5", "prefijo_q": "Represent this sentence for searching relevant passages: ", "prefijo_p": ""},
+        {"nombre": "BAAI/bge-m3", "prefijo_q": "", "prefijo_p": ""},  # bge-multilingual-base-v1.5 no existe en HF; bge-m3 es el modelo multilingüe real de BAAI y no usa prefijo de instrucción
         {"nombre": "intfloat/multilingual-e5-base", "prefijo_q": "query: ", "prefijo_p": "passage: "}
     ]
     
-    ground_truth_dict = cargar_ground_truth_excel(ruta_excel_gt)
+    ground_truth_dict = cargar_ground_truth_excel(ruta_excel_gt, ruta_indice_maestro)
     almacen_metadata = preparar_base_conocimiento(archivos_jsonl)
     
     if not almacen_metadata:
@@ -266,7 +376,7 @@ def ejecutar_benchmark_6_modelos(archivos_jsonl, ruta_excel_gt):
                     chunk_meta = almacen_metadata[idx]
                     score = float(scores[0][i])
                     
-                    ranking_chunks.append(chunk_meta["chunk_id"])
+                    ranking_chunks.append(chunk_meta["texto"])
                     
                     if len(fragmentos_recuperados) < 10:
                         fragmentos_recuperados.append({
@@ -350,5 +460,6 @@ if __name__ == "__main__":
     # Ajusta las rutas relativas o absolutas a tus carpetas reales si es necesario
     archivos_jsonl_limpios = ["../data/clean/f1_documentos.jsonl", "../data/clean/f2_documentos.jsonl", "../data/clean/f3_documentos.jsonl"]
     archivo_excel_gt = "../data/raw/F3_Dinamicas_Territoriales/FASE ORDENADA CODEFEST.xlsx"
-    
-    ejecutar_benchmark_6_modelos(archivos_jsonl_limpios, archivo_excel_gt)
+    archivo_indice_maestro = "../data/raw/Indice_Datos_Codefest.xlsx"  # ajusta si tu copia local vive en otra ruta
+
+    ejecutar_benchmark_6_modelos(archivos_jsonl_limpios, archivo_excel_gt, archivo_indice_maestro)
