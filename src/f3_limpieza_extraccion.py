@@ -49,10 +49,17 @@ PATRON_CATALOGO = re.compile(r'(catalog|tiles-index)', re.IGNORECASE)
 class CodefestTextCleaner:
     @staticmethod
     def clean_text(raw_text):
-        """Normaliza espacios/control chars y repara palabras cortadas por guion de fin de línea."""
+        """Normaliza espacios/tabs dentro de cada línea y repara palabras cortadas por guion de fin
+        de línea, pero preserva los saltos de línea como separadores de fila/feature en vez de
+        colapsar todo a una sola línea (antes: re.sub(r'\\s+', ' ', texto) destruía la frontera
+        entre filas de CSV y entre features de un tile PBF/MVT concatenados, produciendo un blob
+        sin puntuación real que en chunking se partía a ciegas cada 250 palabras). El chunking
+        ahora trata csv como formato tabular y separa por línea directamente, así que esta
+        preservación es la que lo hace posible."""
         texto = re.sub(r'-\n(?=\w)', '', raw_text)
-        texto = re.sub(r'\s+', ' ', texto)
-        return texto.strip()
+        texto = re.sub(r'[ \t\r\f\v]+', ' ', texto)
+        lineas = [l.strip() for l in texto.split('\n') if l.strip()]
+        return '\n'.join(lineas)
 
     @staticmethod
     def eliminar_cabeceras_pies(paginas_texto, min_repeticiones=3):
@@ -260,6 +267,7 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
         texto_crudo = ""
         metadata_extra = {}
 
+        formato_real = tipo
         if tipo == 'pdf':
             texto_crudo, metadata_extra = extractor.extract_pdf(relative_path)
         elif tipo == 'json':
@@ -267,7 +275,13 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
         elif tipo == 'csv':
             texto_crudo, metadata_extra = extractor.extract_tabular(relative_path)
         elif tipo == 'otro':
-            # En F3, 'Otro' son exclusivamente los .pbf (Mapbox Vector Tiles)
+            # En F3, 'Otro' son exclusivamente los .pbf (Mapbox Vector Tiles).
+            # Se guarda formato='pbf' (no el 'otro' generico del inventario)
+            # porque su texto es "una linea por feature", con la misma
+            # estructura de fila que un CSV -- chunking_semantico.py
+            # necesita saber esto para tratarlo como tabular y no como
+            # prosa (mismo problema que tenia el CSV del AI Index).
+            formato_real = 'pbf'
             texto_crudo, metadata_extra = extractor.extract_pbf(relative_path)
         elif tipo == 'texto':
             texto_crudo, metadata_extra = extractor.extract_texto(relative_path)
@@ -282,8 +296,9 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
             documento_procesado = {
                 "doc_id": doc_id,
                 "fuente": nombre_archivo,
-                "formato": tipo,
-                "fenomeno": FENOMENO_OBJETIVO,
+                "formato": formato_real,
+                # Tabla 1 del spec exige "fenomeno" como entero (1, 2 o 3).
+                "fenomeno": int(FENOMENO_OBJETIVO[1:]),
                 "texto_limpio": texto_limpio,
                 "idioma_detectado": idioma_detectado,
                 **metadata_extra

@@ -338,7 +338,9 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
                 "doc_id": doc_id,
                 "fuente": nombre_archivo,
                 "formato": tipo,
-                "fenomeno": FENOMENO_OBJETIVO,
+                # Tabla 1 del spec exige "fenomeno" como entero (1, 2 o 3), no el
+                # string "F1"/"F2"/"F3" (mismo fix aplicado en f1_ y f3_limpieza_extraccion.py).
+                "fenomeno": int(FENOMENO_OBJETIVO[1:]),
                 "texto_limpio": texto_limpio,
                 "idioma_detectado": idioma_detectado,
                 **metadata_extra
@@ -376,7 +378,8 @@ def _validar_conteo_total(excel_indice_path, n_procesados, n_pendientes):
 
 
 # Bloque de ejecución principal
-docs_limpios, pendientes = ejecutar_pipeline_extraccion(
-      excel_indice_path="../data/raw/Indice_Datos_Codefest.xlsx",
-      base_corpus_dir="../data/raw/",
-      output_jsonl_path="../data/clean/f2_documentos.jsonl" )
+if __name__ == "__main__":
+    docs_limpios, pendientes = ejecutar_pipeline_extraccion(
+          excel_indice_path="../data/raw/Indice_Datos_Codefest.xlsx",
+          base_corpus_dir="../data/raw/",
+          output_jsonl_path="../data/clean/f2_documentos.jsonl" )

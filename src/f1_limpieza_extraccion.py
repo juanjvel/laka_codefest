@@ -31,10 +31,18 @@ FENOMENO_OBJETIVO = "F1"
 class CodefestTextCleaner:
     @staticmethod
     def clean_text(raw_text):
-        """Normaliza espacios/control chars y repara palabras cortadas por guion de fin de línea."""
+        """Normaliza espacios/tabs dentro de cada línea y repara palabras cortadas por guion de fin
+        de línea, pero preserva los saltos de línea como separadores de párrafo/fila en vez de
+        colapsar todo el texto a una sola línea (antes: re.sub(r'\\s+', ' ', texto) destruía la
+        frontera entre filas de un CSV/XLSX concatenado, produciendo un solo blob sin puntuación
+        real que en chunking se partía a ciegas cada 250 palabras — visto en producción: un solo
+        CSV del AI Index generó más de 58,000 chunks). El chunking ahora trata csv/xlsx como
+        formato tabular y separa por línea directamente (ver chunking_semantico.py), así que esta
+        preservación de saltos de línea es la que lo hace posible."""
         texto = re.sub(r'-\n(?=\w)', '', raw_text)
-        texto = re.sub(r'\s+', ' ', texto)
-        return texto.strip()
+        texto = re.sub(r'[ \t\r\f\v]+', ' ', texto)
+        lineas = [l.strip() for l in texto.split('\n') if l.strip()]
+        return '\n'.join(lineas)
 
     @staticmethod
     def eliminar_cabeceras_pies(paginas_texto, min_repeticiones=3):
@@ -231,7 +239,9 @@ def ejecutar_pipeline_extraccion(excel_indice_path, base_corpus_dir, output_json
                 "doc_id": doc_id,
                 "fuente": nombre_archivo,
                 "formato": tipo,
-                "fenomeno": FENOMENO_OBJETIVO,
+                # Tabla 1 del spec exige "fenomeno" como entero (1, 2 o 3), no el
+                # string "F1"/"F2"/"F3" que usa la columna del Excel para filtrar.
+                "fenomeno": int(FENOMENO_OBJETIVO[1:]),
                 "texto_limpio": texto_limpio,
                 "idioma_detectado": idioma_detectado,
                 **metadata_extra

@@ -38,11 +38,19 @@ equipo pueda revisarlas y documentarlas como excepción en el informe
 técnico.
 """
 import json
+import logging
 import os
 import re
 
 import numpy as np
 import nltk
+
+# Silenciamos el aviso benigno de HF "Token indices sequence length is
+# longer than..." que se dispara al llamar tokenizer.encode() sin
+# truncar (lo hacemos a proposito en construir_metadata_chunks para medir
+# el largo real). El caso se detecta y corrige en codigo (ver
+# _reempaquetar_por_tokens), asi que el aviso de consola es ruido.
+logging.getLogger("transformers").setLevel(logging.ERROR)
 
 # Mapa de código de idioma (langdetect, campo idioma_detectado) -> nombre de
 # modelo punkt de NLTK. Los idiomas no cubiertos por punkt caen a 'english',
@@ -64,8 +72,58 @@ def asegurar_recursos_nltk():
             nltk.download(recurso.split("/")[-1], quiet=True)
 
 
-def tokenizar_oraciones(texto: str, idioma_detectado: str = "") -> list:
-    """Divide el texto en oraciones respetando fronteras lingüísticas completas."""
+FORMATOS_TABULARES = {"csv", "xlsx", "excel", "pbf"}
+
+# Documentos verificados manualmente como versiones genuinas en un idioma
+# fuera de es/en/pt (Sección 4.3 del spec: el corpus y las 50 consultas de
+# evaluación están solo en esos tres idiomas). La mayoría son traducciones
+# oficiales de un documento que ya existe en el corpus en otro idioma —
+# la ONU (UNOOSA), SWF y SIPRI publican el mismo reporte en varios idiomas
+# (p.ej. UNOOSA_st-space-088{a,c,f,r}.pdf = árabe/chino/francés/ruso del
+# mismo documento) — así que excluirlos no pierde información única, y un
+# chunk en esos idiomas no puede ser recuperado por ninguna consulta.
+#
+# NO se filtra por idioma_detectado directamente: langdetect da falsos
+# positivos frecuentes en texto corto/técnico (contenido real en español
+# de CENIA detectado como catalán o alemán) y en contenido no lingüístico
+# como los .pbf (mapas, detectados como catalán/francés/rumano al azar).
+# Cada doc_id de esta lista se verificó contra su `fuente` original.
+DOC_IDS_EXCLUIDOS_IDIOMA = {
+    "F1-AIINDEX-014",                                                    # zh-cn
+    "F2-SWF-037", "F2-SWF-040", "F2-SWF-054", "F2-SWF-115",              # zh-cn
+    "F2-UNOOSA-014", "F2-UNOOSA-026",                                    # zh-cn
+    "F3-SIPRI-004",                                                      # zh-cn
+    "F2-CSIS-157",                                                       # ja
+    "F2-SWF-030", "F2-SWF-041", "F2-SWF-050", "F2-SWF-083",
+    "F2-SWF-100", "F2-SWF-117",                                          # fr
+    "F2-UNOOSA-016", "F2-UNOOSA-022", "F2-UNOOSA-028",                   # fr
+    "F3-SIPRI-020",                                                      # fr
+    "F2-SWF-039", "F2-SWF-114",                                          # ar
+    "F2-UNOOSA-013", "F2-UNOOSA-025",                                    # ar
+    "F2-SWF-042", "F2-SWF-069", "F2-SWF-119",                            # ru
+    "F2-UNOOSA-017", "F2-UNOOSA-029",                                    # ru
+    "F3-SIPRI-002", "F3-SIPRI-100",                                      # ko
+}
+
+
+def tokenizar_oraciones(texto: str, idioma_detectado: str = "", formato: str = "") -> list:
+    """Divide el texto en unidades atómicas ('oraciones') respetando fronteras
+    completas.
+
+    Para fuentes tabulares (csv/xlsx, filas 'col: val | col: val' generadas
+    por *_limpieza_extraccion.py) NO se usa NLTK: Punkt trata un punto
+    inmediatamente después de un número como parte del número, no como fin
+    de oración (verificado empíricamente: 'valor: 45.2.\\npais: Peru...' se
+    tokeniza como UNA sola oración), y casi toda fila de un dataset numérico
+    termina en un valor numérico. En su lugar se usa el salto de línea, que
+    es la frontera de fila real que preserva clean_text() en las etapas de
+    extracción. Sin este caso especial, un solo CSV grande (visto en
+    producción: AI Index) se trata como una única 'oración' gigante y el
+    chunking la parte a ciegas cada 250 palabras, generando decenas de
+    miles de fragmentos no recuperables."""
+    if formato in FORMATOS_TABULARES:
+        return [l.strip() for l in texto.split("\n") if l.strip()]
+
     idioma_nltk = IDIOMA_A_PUNKT.get(idioma_detectado, "english")
     try:
         oraciones = nltk.sent_tokenize(texto, language=idioma_nltk)
@@ -190,9 +248,9 @@ def _punto_de_corte_clausal(palabras: list, max_palabras: int, retroceso_maximo:
 
 
 def _dividir_texto_largo(texto: str, max_palabras: int, doc_id: str = "",
-                          eventos_particion: list = None) -> list:
-    """Último recurso para 'oraciones' patológicamente largas (según NLTK)
-    que exceden max_palabras por sí solas. Dos casos:
+                          formato: str = "", eventos_particion: list = None) -> list:
+    """Último recurso para 'oraciones' patológicamente largas que exceden
+    max_palabras por sí solas. Dos casos:
 
     1. Artefacto no lingüístico (tabla/lista sin puntuación real, p.ej.
        una fila de presupuesto por línea): no son oraciones genuinas, así
@@ -217,7 +275,9 @@ def _dividir_texto_largo(texto: str, max_palabras: int, doc_id: str = "",
             piezas.append(linea)
             continue
 
-        es_prosa = _parece_prosa(linea)
+        # Si el formato de origen ya es tabular, no hace falta adivinar con
+        # el heurístico: se sabe con certeza que no es prosa.
+        es_prosa = False if formato in FORMATOS_TABULARES else _parece_prosa(linea)
         if es_prosa:
             resto = palabras
             while len(resto) > max_palabras:
@@ -241,7 +301,8 @@ def _dividir_texto_largo(texto: str, max_palabras: int, doc_id: str = "",
 
 
 def _forzar_limite_palabras(oraciones_grupo: list, max_palabras: int, overlap_oraciones: int,
-                             doc_id: str = "", eventos_particion: list = None) -> list:
+                             doc_id: str = "", formato: str = "",
+                             eventos_particion: list = None) -> list:
     """Fallback obligatorio: si un grupo semántico excede max_palabras, se
     subdivide empaquetando oraciones (idéntico al chunking por tamaño fijo),
     lo que garantiza que ningún chunk final supere el límite y que los
@@ -265,7 +326,8 @@ def _forzar_limite_palabras(oraciones_grupo: list, max_palabras: int, overlap_or
                 fragmentos.append(" ".join(chunk_actual))
                 chunk_actual, palabras_actuales = [], 0
             fragmentos.extend(_dividir_texto_largo(
-                oracion, max_palabras, doc_id=doc_id, eventos_particion=eventos_particion
+                oracion, max_palabras, doc_id=doc_id, formato=formato,
+                eventos_particion=eventos_particion,
             ))
             continue
 
@@ -328,7 +390,8 @@ def fragmentar_documento_semantico(
         return []
 
     doc_id = doc.get("doc_id", "DOC-UNKNOWN")
-    oraciones = tokenizar_oraciones(texto, doc.get("idioma_detectado", ""))
+    formato = doc.get("formato", "")
+    oraciones = tokenizar_oraciones(texto, doc.get("idioma_detectado", ""), formato)
     if not oraciones:
         return []
     if len(oraciones) == 1:
@@ -344,10 +407,69 @@ def fragmentar_documento_semantico(
         if sum(contar_palabras(o) for o in grupo) > max_palabras:
             fragmentos.extend(_forzar_limite_palabras(
                 grupo, max_palabras, overlap_oraciones_fallback,
-                doc_id=doc_id, eventos_particion=eventos_particion,
+                doc_id=doc_id, formato=formato, eventos_particion=eventos_particion,
             ))
         else:
             fragmentos.append(" ".join(grupo))
+    return fragmentos
+
+
+def _cortar_por_tokens_bruto(texto: str, max_tokens_encoder: int, num_tokens_fn) -> list:
+    """Último recurso: corta un texto en bloques garantizando, por
+    verificación directa con el tokenizer real, que ninguno exceda
+    max_tokens_encoder. Se usa solo cuando una oración/cláusula individual
+    ya excede la ventana del encoder por sí sola en tokens reales (raro,
+    pero posible pese a estar bajo el límite de 250 palabras, por
+    inflación de subword tokenization en vocabulario técnico)."""
+    palabras = texto.split()
+    piezas, inicio = [], 0
+    while inicio < len(palabras):
+        restante = palabras[inicio:]
+        objetivo = min(len(restante), max(1, int(max_tokens_encoder * 0.85)))
+        while objetivo < len(restante) and num_tokens_fn(" ".join(restante[:objetivo + 1])) <= max_tokens_encoder:
+            objetivo += 1
+        while objetivo > 1 and num_tokens_fn(" ".join(restante[:objetivo])) > max_tokens_encoder:
+            objetivo -= 1
+        piezas.append(" ".join(restante[:objetivo]))
+        inicio += objetivo
+    return piezas
+
+
+def _reempaquetar_por_tokens(texto_chunk: str, tokenizer, max_tokens_encoder: int,
+                              idioma_detectado: str = "", formato: str = "", doc_id: str = "",
+                              eventos_particion: list = None) -> list:
+    """Red de seguridad final sobre un chunk ya empaquetado por palabras
+    (<= max_palabras): si según el tokenizer REAL del encoder tiene más
+    tokens que max_tokens_encoder, se vuelve a partir usando conteo de
+    tokens como medida en vez de palabras, a nivel de oración (para no
+    duplicar la lógica de partición por cláusula). Garantiza que ningún
+    registro final de metadata exceda la ventana del encoder, en vez de
+    solo dejar constancia en el archivo de auditoría."""
+    def num_tokens(t):
+        return len(tokenizer.encode(t, add_special_tokens=True))
+
+    oraciones = tokenizar_oraciones(texto_chunk, idioma_detectado, formato) or [texto_chunk]
+    fragmentos, actual, tokens_actual = [], [], 0
+    for oracion in oraciones:
+        t_oracion = num_tokens(oracion)
+        if t_oracion > max_tokens_encoder:
+            if actual:
+                fragmentos.append(" ".join(actual))
+                actual, tokens_actual = [], 0
+            fragmentos.extend(_cortar_por_tokens_bruto(oracion, max_tokens_encoder, num_tokens))
+            if eventos_particion is not None:
+                eventos_particion.append({
+                    "doc_id": doc_id, "tipo": "oracion_unica_excede_ventana_encoder",
+                    "num_tokens": t_oracion, "vista_previa": oracion[:120],
+                })
+            continue
+        if actual and tokens_actual + t_oracion > max_tokens_encoder:
+            fragmentos.append(" ".join(actual))
+            actual, tokens_actual = [], 0
+        actual.append(oracion)
+        tokens_actual += t_oracion
+    if actual:
+        fragmentos.append(" ".join(actual))
     return fragmentos
 
 
@@ -373,38 +495,52 @@ def construir_metadata_chunks(doc: dict, textos_fragmentos: list, tokenizer=None
     tokenizer: tokenizer real del encoder (ver _obtener_tokenizer). Si es
         None, num_tokens cae a un proxy por conteo de palabras (menos
         preciso: el multilingual-e5-small usa subword tokenization, así
-        que 250 palabras en español no equivalen a 250 tokens).
+        que 250 palabras en español no equivalen a 250 tokens; en la
+        práctica se han observado inflaciones de ~2x).
     max_tokens_encoder: ventana máxima del encoder (512 para
-        multilingual-e5-small). Si un chunk la excede pese a respetar las
-        250 palabras, se registra en eventos_particion para revisión
-        manual en vez de fallar silenciosamente en la etapa de indexación.
+        multilingual-e5-small). Un chunk de <= 250 palabras que la exceda
+        en tokens reales se vuelve a partir con _reempaquetar_por_tokens
+        ANTES de escribirse en la metadata, así que ningún registro final
+        puede superar esta ventana. Cada re-partición queda registrada en
+        eventos_particion para el informe técnico.
     """
     doc_id = doc.get("doc_id", "DOC-UNKNOWN")
+    idioma = doc.get("idioma_detectado", "")
+    formato = doc.get("formato", "")
     registros = []
-    for posicion, texto_chunk in enumerate(textos_fragmentos):
+    posicion = 0
+    for texto_chunk in textos_fragmentos:
+        piezas = [texto_chunk]
         if tokenizer is not None:
-            num_tokens = len(tokenizer.encode(texto_chunk, add_special_tokens=True))
-        else:
-            num_tokens = contar_palabras(texto_chunk)
+            num_tokens_original = len(tokenizer.encode(texto_chunk, add_special_tokens=True))
+            if num_tokens_original > max_tokens_encoder:
+                piezas = _reempaquetar_por_tokens(
+                    texto_chunk, tokenizer, max_tokens_encoder,
+                    idioma_detectado=idioma, formato=formato, doc_id=doc_id,
+                    eventos_particion=eventos_particion,
+                )
+                if eventos_particion is not None:
+                    eventos_particion.append({
+                        "doc_id": doc_id, "tipo": "reempaquetado_por_tokens",
+                        "num_tokens_original": num_tokens_original,
+                        "num_subpiezas": len(piezas),
+                        "vista_previa": texto_chunk[:120],
+                    })
 
-        if tokenizer is not None and num_tokens > max_tokens_encoder and eventos_particion is not None:
-            eventos_particion.append({
+        for pieza in piezas:
+            num_tokens = (len(tokenizer.encode(pieza, add_special_tokens=True))
+                          if tokenizer is not None else contar_palabras(pieza))
+            registros.append({
                 "doc_id": doc_id,
-                "tipo": "excede_ventana_encoder",
+                "chunk_id": f"{doc_id}-chunk-{posicion:03d}",
+                "fuente": doc.get("fuente", ""),
+                "formato": doc.get("formato", ""),
+                "fenomeno": doc.get("fenomeno", ""),
+                "posicion": posicion,
                 "num_tokens": num_tokens,
-                "vista_previa": texto_chunk[:120],
+                "texto": pieza,
             })
-
-        registros.append({
-            "doc_id": doc_id,
-            "chunk_id": f"{doc_id}-chunk-{posicion:03d}",
-            "fuente": doc.get("fuente", ""),
-            "formato": doc.get("formato", ""),
-            "fenomeno": doc.get("fenomeno", ""),
-            "posicion": posicion,
-            "num_tokens": num_tokens,
-            "texto": texto_chunk,
-        })
+            posicion += 1
     return registros
 
 
@@ -415,18 +551,26 @@ def procesar_corpus(
     tokenizer=None,
     ruta_auditoria: str = None,
     ruta_fallidos: str = None,
+    ruta_excluidos: str = None,
+    excluir_doc_ids: set = None,
     **kwargs_fragmentacion,
 ) -> dict:
     """Procesa uno o más archivos *_documentos.jsonl (salida de
     limpieza_extraccion.py) y escribe un único metadata.jsonl combinado,
     con el esquema obligatorio de la Tabla 1 del spec.
 
+    excluir_doc_ids: doc_id que se saltan por completo (no generan chunks
+        ni metadata) — pensado para DOC_IDS_EXCLUIDOS_IDIOMA, pero acepta
+        cualquier set. Cada exclusión queda registrada en ruta_excluidos
+        para trazabilidad, no se descarta en silencio.
+
     Un documento fallido (excepción durante chunking) no interrumpe el
     resto del corpus: se registra en ruta_fallidos y se continúa, siguiendo
     el mismo patrón de auditoría _pendientes.jsonl usado en las etapas de
     extracción del proyecto.
     """
-    eventos_particion, fallidos = [], []
+    excluir_doc_ids = excluir_doc_ids or set()
+    eventos_particion, fallidos, excluidos = [], [], []
     total_docs, total_chunks = 0, 0
 
     with open(ruta_metadata_salida, "w", encoding="utf-8") as f_out:
@@ -441,6 +585,15 @@ def procesar_corpus(
                         continue
                     try:
                         doc = json.loads(linea)
+                        doc_id = doc.get("doc_id", "")
+                        if doc_id in excluir_doc_ids:
+                            excluidos.append({
+                                "doc_id": doc_id,
+                                "fuente": doc.get("fuente", ""),
+                                "idioma_detectado": doc.get("idioma_detectado", ""),
+                                "motivo": "idioma_fuera_de_es_en_pt",
+                            })
+                            continue
                         fragmentos = fragmentar_documento_semantico(
                             doc, modelo, eventos_particion=eventos_particion,
                             **kwargs_fragmentacion,
@@ -471,11 +624,17 @@ def procesar_corpus(
             for ev in fallidos:
                 f_fail.write(json.dumps(ev, ensure_ascii=False) + "\n")
 
+    if ruta_excluidos and excluidos:
+        with open(ruta_excluidos, "w", encoding="utf-8") as f_exc:
+            for ev in excluidos:
+                f_exc.write(json.dumps(ev, ensure_ascii=False) + "\n")
+
     return {
         "total_docs": total_docs,
         "total_chunks": total_chunks,
         "particiones_forzadas": len(eventos_particion),
         "fallidos": len(fallidos),
+        "excluidos": len(excluidos),
     }
 
 
@@ -483,15 +642,19 @@ if __name__ == "__main__":
     import argparse
     from sentence_transformers import SentenceTransformer
 
-    parser = argparse.ArgumentParser(description="Chunking semantico F1 + F3 -> metadata.jsonl")
+    parser = argparse.ArgumentParser(description="Chunking semantico F1 + F2 + F3 -> metadata.jsonl")
     parser.add_argument("--entrada", nargs="+", default=[
         "../data/clean/f1_documentos.jsonl",
+        "../data/clean/f2_documentos.jsonl",
         "../data/clean/f3_documentos.jsonl",
     ], help="Archivos *_documentos.jsonl a procesar (se combinan en un solo metadata.jsonl)")
     parser.add_argument("--salida", default="../data/clean/metadata.jsonl",
                          help="Ruta del metadata.jsonl combinado (Tabla 1 del spec)")
     parser.add_argument("--auditoria", default="../data/clean/_chunking_particiones_forzadas.jsonl")
     parser.add_argument("--fallidos", default="../data/clean/_chunking_pendientes.jsonl")
+    parser.add_argument("--excluidos", default="../data/clean/_chunking_excluidos_idioma.jsonl")
+    parser.add_argument("--sin-exclusion-idioma", action="store_true",
+                         help="Desactiva la exclusion de documentos fuera de es/en/pt (DOC_IDS_EXCLUIDOS_IDIOMA)")
     parser.add_argument("--modelo", default="intfloat/multilingual-e5-small")
     parser.add_argument("--max-palabras", type=int, default=250)
     parser.add_argument("--min-palabras", type=int, default=40)
@@ -514,12 +677,15 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         ruta_auditoria=args.auditoria,
         ruta_fallidos=args.fallidos,
+        ruta_excluidos=args.excluidos,
+        excluir_doc_ids=set() if args.sin_exclusion_idioma else DOC_IDS_EXCLUIDOS_IDIOMA,
         max_palabras=args.max_palabras,
         min_palabras=args.min_palabras,
         percentil_breakpoint=args.percentil_breakpoint,
     )
 
-    print(f"\nDocumentos procesados: {resumen['total_docs']}")
+    print(f"\nDocumentos excluidos (idioma fuera de es/en/pt): {resumen['excluidos']}")
+    print(f"Documentos procesados: {resumen['total_docs']}")
     print(f"Chunks generados: {resumen['total_chunks']}")
     print(f"Metadata escrita en: {args.salida}")
     if resumen["particiones_forzadas"]:
