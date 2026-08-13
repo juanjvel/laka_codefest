@@ -4,6 +4,7 @@ data/raw/F2_Seguridad_Entorno_Espacial/
 data/raw/F3_Dinamicas_Territoriales/
 
 data/clean/f1_documentos.jsonl
+data/clean/metadata.jsonl
 *.zip
 
 .venv/
