@@ -479,7 +479,17 @@ oficiales.
 \section{Grafo de conocimiento}
 \seccionspec{7}
 
-No se implementó el componente bonus de grafo de conocimiento en esta
-entrega.
+Como componente bonus se construyó un grafo de conocimiento
+(\texttt{entrega/grafo/grafo.graphml}, formato GraphML, 453{,}025 nodos y
+1{,}155{,}148 aristas) a partir de los mismos chunks indexados. Los nodos son
+entidades nombradas (tipos \texttt{PER}, \texttt{ORG}, \texttt{LOC}) con
+atributos de frecuencia y fenómeno(s) (\texttt{1}/\texttt{2}/\texttt{3}) en
+que aparecen; las aristas son relaciones de coocurrencia
+(\texttt{co\_occurs\_with}) ponderadas por número de coocurrencias, y
+conservan trazabilidad completa hacia \texttt{doc\_ids} y \texttt{chunk\_ids}
+de origen, más un ejemplo de evidencia textual cuando aplica. El grafo no
+participa en la recuperación en esta entrega (que sigue siendo puramente
+vectorial vía FAISS, sin LLMs) y se entrega como artefacto exploratorio
+complementario para análisis de co-ocurrencia de entidades entre fenómenos.
 
 \end{document}
