@@ -19,7 +19,7 @@ entrega/
       index.faiss                               # índice FAISS (faiss.write_index)
       metadata.jsonl                             # metadata por chunk, Tabla 1 del spec
     grafo/
-      grafo.graphml
+      grafo.graphml                              # Grafo del proyecto como bonus
 ```
 
 Para el detalle de las decisiones de diseño (estrategia de chunking y su justificación,
