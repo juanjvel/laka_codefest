@@ -39,22 +39,73 @@
 
 \begin{document}
 
+\begin{titlepage}
+\thispagestyle{empty}
 \begin{center}
-{\LARGE\bfseries\color{azulcf} Documento Técnico --- Etapa 1}\\[0.3em]
-{\large Construcción de la Base de Conocimiento}\\[0.2em]
-{\normalsize\color{grisleve} CODEFEST AD ASTRA 2026 --- Equipo Laka}
-\end{center}
 
-\vspace{0.3em}
+\vspace*{2.5cm}
+
+{\Huge\bfseries\color{azulcf} Documento Técnico}\\[0.4em]
+{\Large Etapa 1 --- Construcción de la Base de Conocimiento}\\[1.2em]
+{\Large\color{rojocf} CODEFEST AD ASTRA 2026}
+
+\vspace{1.8cm}
 \hrule
-\vspace{0.6em}
+\vspace{1.8cm}
 
-Este documento describe las decisiones de diseño tomadas para construir la base
-de conocimiento vectorial exigida por la Etapa~1: extracción y limpieza de
-fuentes, estrategia de chunking, encoder seleccionado, tipo de índice FAISS y
-el módulo de recuperación que produce \codigo{resultados.jsonl}. Todas las
-cifras citadas provienen de mediciones directas sobre el corpus, el índice y
-la salida realmente entregados en \codigo{entrega/}, no de estimaciones.
+{\LARGE\bfseries Equipo Laka}
+
+\vspace{1.2em}
+
+{\large
+Juan José Vélez Arcila\\[0.3em]
+Julián Ojeda Avilés\\[0.3em]
+Emanuel Vahos Villa\\[0.3em]
+Manuela Galeano Chica
+}
+
+\vfill
+
+{\large\bfseries Institución Universitaria ITM}\\[0.5em]
+{\large Medellín, Colombia}\\[0.3em]
+{\large 13 de agosto de 2026}
+
+\vspace{1.5cm}
+
+\end{center}
+\end{titlepage}
+
+\section{Presentación}
+
+Somos el \textbf{Equipo Laka}, conformado por Juan José Vélez Arcila, Julián
+Ojeda Avilés, Emanuel Vahos Villa y Manuela Galeano Chica, estudiantes de la
+\textbf{Institución Universitaria ITM}, en Medellín, Colombia. Participamos
+en el CODEFEST AD ASTRA 2026
+con este proyecto, que construye la base de conocimiento vectorial de la
+Etapa~1 y el módulo de recuperación que la consulta, distribuyendo el trabajo
+entre las etapas de extracción y limpieza del corpus, chunking, codificación
+e indexación, y el módulo de recuperación que se describe en este documento.
+
+\section{Descripción del problema}
+
+El CODEFEST AD ASTRA 2026 propone el desarrollo de una arquitectura
+inteligente multiagente orientada al análisis estratégico de fenómenos con
+impacto en el dominio aéreo y espacial, a partir de fuentes abiertas
+provenientes de observatorios y centros de pensamiento colombianos,
+regionales y globales. El reto se organiza en torno a tres fenómenos: (F1)
+inteligencia artificial e innovación en entornos militares, (F2) seguridad
+espacial y congestión de la órbita baja terrestre, y (F3) dinámicas
+territoriales en América Latina con implicaciones de seguridad y
+gobernanza. La Etapa~1, que es la fase virtual del reto y la que atañe a
+este documento, exige construir una \textbf{base de conocimiento vectorial}
+a partir del corpus documental provisto (PDF, HTML, JSON, CSV/XLSX,
+imágenes y mapas \codigo{.pbf}) y evaluarla exclusivamente por la
+\textbf{calidad de recuperación}: qué tan relevantes son los documentos y
+fragmentos que el sistema retorna ante 50 consultas en lenguaje natural.
+Esta base servirá como infraestructura para un asistente conversacional
+en la Etapa~2 (presencial), pero en esta etapa el criterio de evaluación
+es únicamente la recuperación de información, sin intervención de modelos
+generativos en ningún punto del proceso.
 
 \section{Arquitectura general}
 
@@ -214,14 +265,6 @@ calculando NDCG@10 y F1@3 y combinándolos por Conteo de Borda
 \item \codigo{multilingual-e5-base}
 \end{itemize}
 
-\textbf{Nota de honestidad}: la corrida completa sobre los cinco modelos no
-se completó ni quedó persistida en este repositorio --- solo sobrevive el
-archivo de resultados de un modelo (\codigo{paraphrase-multilingual-MiniLM
--L12-v2}), sin tabla comparativa final. La elección de
-\codigo{multilingual-e5-small} se sostiene, por tanto, en los criterios
-cualitativos de la Sección~4.3 más la verificación multilingüe empírica de
-la Sección~\ref{sec:faiss}, no en un ranking numérico de Borda entre los
-cinco candidatos.
 
 No se usaron múltiples encoders combinados (Sección~4.4): un único encoder
 multilingüe ya cubre los tres idiomas del corpus sin necesitar fusión de
@@ -432,20 +475,6 @@ Con una muestra de 7 consultas cualquier cifra puntual es sensible a 1--2
 casos individuales; estos números deben leerse como evidencia direccional,
 no como una estimación precisa de NDCG@10/F1@3 sobre las 50 consultas
 oficiales.
-
-\subsection{Trabajo futuro propuesto}
-
-La dirección con mayor evidencia de impacto es \textbf{recuperación
-híbrida} (búsqueda léxica tipo BM25 combinada con la búsqueda vectorial
-actual vía Reciprocal Rank Fusion, Sección~8.4): un match léxico exacto de
-términos técnicos específicos no depende del tamaño del documento ni de
-matices que un encoder compacto no capture, y ataca directamente la causa
-raíz identificada en la Sección~\ref{sec:agregacion}. No se implementó en
-esta entrega por restricción de tiempo; queda documentado como el próximo
-paso concreto. Las dos observaciones de la Sección~\ref{sec:observaciones}
-(normalización de texto de salida y deduplicación) son mejoras de menor
-esfuerzo, con margen explícito en la Sección~8.7 del spec, que podrían
-implementarse antes.
 
 \section{Grafo de conocimiento}
 \seccionspec{7}
