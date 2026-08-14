@@ -18,8 +18,8 @@ entrega/
     encoder_multilingual-e5-small/
       index.faiss                               # índice FAISS (faiss.write_index)
       metadata.jsonl                             # metadata por chunk, Tabla 1 del spec
-  grafo/
-    grafo.graphml
+    grafo/
+      grafo.graphml
 ```
 
 Para el detalle de las decisiones de diseño (estrategia de chunking y su justificación,
