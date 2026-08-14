@@ -1,0 +1,33 @@
+# Dependencias para ejecutar generador.py (Etapa 1, CODEFEST AD ASTRA 2026).
+#
+#   python -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#   .venv/bin/python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
+#   .venv/bin/python generador.py --indice base_vectorial/encoder_multilingual-e5-small \
+#       --consultas consultas.jsonl --salida resultados.jsonl
+#
+# La primera ejecucion descarga el encoder intfloat/multilingual-e5-small
+# (~470 MB) desde HuggingFace, por lo que requiere conexion a internet.
+#
+# Nota de red: si nltk.download('punkt') se queda colgado (sin acceso a los
+# servidores oficiales de NLTK en algunas redes), bajar los paquetes desde el
+# mirror de GitHub y colocarlos a mano:
+#   mkdir -p ~/nltk_data/tokenizers && cd /tmp
+#   for pkg in punkt punkt_tab; do
+#     curl -sL -o "${pkg}.zip" \
+#       "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/${pkg}.zip"
+#     python3 -c "import zipfile; zipfile.ZipFile('${pkg}.zip').extractall('$HOME/nltk_data/tokenizers')"
+#   done
+
+faiss-cpu==1.15.0            # indice vectorial (Seccion 5, obligatorio)
+sentence-transformers==5.7.0 # carga del encoder y codificacion
+torch==2.13.0                # backend de sentence-transformers
+transformers==5.15.0         # tokenizador/modelo HuggingFace
+nltk==3.10.3                 # tokenizacion de oraciones (division de fragmentos >250 palabras)
+
+# Opcionales, no requeridas por generador.py en tiempo de ejecucion:
+numpy==2.5.1                 # usado por otros scripts del pipeline (construir_indice_faiss.py, etc.)
+pymupdf==1.28.0              # solo si se regenera consultas.jsonl desde el PDF oficial de consultas
+                              # (data/raw/Extracto_Preguntas_50_v2.pdf); consultas.jsonl ya viene
+                              # generado y comiteado en esta carpeta, asi que no hace falta para
+                              # correr generador.py tal cual.
