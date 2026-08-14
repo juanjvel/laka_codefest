@@ -1,0 +1,7 @@
+base_vectorial/
+resultados.jsonl
+salida/
+__pycache__/
+*.pyc
+informe_tecnico.pdf
+informe_tecnico.tex

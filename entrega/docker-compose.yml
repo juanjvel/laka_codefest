@@ -1,0 +1,14 @@
+# Prueba de reproducibilidad de la Etapa 1 (CODEFEST AD ASTRA 2026):
+# construye la imagen y corre generador.py contra el índice FAISS ya
+# comiteado en base_vectorial/, escribiendo el resultado en salida/
+# (sin tocar el resultados.jsonl entregado).
+#
+#   docker compose up --build
+#
+services:
+  generador:
+    build: .
+    volumes:
+      - ./base_vectorial:/app/base_vectorial:ro
+      - ./consultas.jsonl:/app/consultas.jsonl:ro
+      - ./salida:/app/salida
