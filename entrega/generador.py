@@ -30,8 +30,10 @@ ALIAS_ID/ALIAS_TEXTO, agrégalos a esas listas -- es el único punto de
 ajuste que debería hacer falta.
 """
 import argparse
+import difflib
 import json
 import linecache
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -162,20 +164,62 @@ def agregar_a_documentos(candidatos, objetos, top_n=3, metodo="max"):
 
 
 # ---------------------------------------------------------------------------
+# Normalización de texto de salida (autodefensa contra ruido de extracción)
+# ---------------------------------------------------------------------------
+def normalizar_texto(texto):
+    """Colapsa saltos de línea y espacios repetidos heredados de la extracción
+    de PDF (F1/F3 extraen "una línea por línea visual", preservando saltos de
+    línea de layout a mitad de oración -- ver informe_tecnico.pdf Sección 8.5:
+    89% de los fragmentos entregados arrastraban ese ruido).
+
+    Autorizado explícitamente por la Sección 9.2.1 del spec: el texto de
+    salida puede modificarse. No toca el campo `texto` de metadata.jsonl, que
+    la Tabla 2 exige sin modificaciones -- esta función solo se aplica sobre
+    el texto que se escribe en resultados.jsonl.
+    """
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+# ---------------------------------------------------------------------------
+# Deduplicación de fragmentos casi idénticos (Sección 8.7: post-filtro sobre
+# el contenido de metadata)
+# ---------------------------------------------------------------------------
+def es_casi_duplicado(texto, textos_previos, umbral=0.92):
+    """True si `texto` es casi idéntico a alguno de `textos_previos`.
+
+    El corpus incluye documentos con filas de contenido tabular muy
+    repetitivo; sin este filtro, 19/50 consultas (38%) devolvían al menos dos
+    fragmentos casi idénticos dentro de su propio top-10 (informe_tecnico.pdf
+    Sección 8.5). Comparación por similitud de secuencia de caracteres sobre
+    texto ya normalizado -- no requiere reencodear nada ni tocar el índice.
+    """
+    for previo in textos_previos:
+        if difflib.SequenceMatcher(None, texto, previo).ratio() >= umbral:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Construcción de la lista de fragmentos (Sección 9.2 / 9.2.1)
 # ---------------------------------------------------------------------------
-def construir_fragmentos(candidatos, objetos, top_n=10, max_palabras=250):
+def construir_fragmentos(candidatos, objetos, top_n=10, max_palabras=250,
+                          deduplicar=True, umbral_duplicado=0.92):
     fragmentos = []
+    textos_vistos = []
     for score, fid in candidatos:
         if len(fragmentos) >= top_n:
             break
         obj = objetos[fid]
-        texto = obj["texto"]
+        texto = normalizar_texto(obj["texto"])
         piezas = [texto] if len(texto.split()) <= max_palabras else dividir_en_subfragmentos(
             texto, max_palabras)
         for pieza in piezas:
             if len(fragmentos) >= top_n:
                 break
+            pieza = normalizar_texto(pieza)
+            if deduplicar and es_casi_duplicado(pieza, textos_vistos, umbral_duplicado):
+                continue
+            textos_vistos.append(pieza)
             fragmentos.append({
                 "rank": len(fragmentos) + 1,
                 "chunk_id": obj["chunk_id"],   # mismo chunk_id para todas las sub-piezas (9.2.1)
@@ -190,7 +234,8 @@ def construir_fragmentos(candidatos, objetos, top_n=10, max_palabras=250):
 # ---------------------------------------------------------------------------
 def procesar_consulta(query_id, texto_consulta, index, ruta_metadata, modelo,
                        k_inicial=30, k_maximo=200, top_docs=3, top_fragmentos=10,
-                       max_palabras=250, metodo_agregacion="max"):
+                       max_palabras=250, metodo_agregacion="max",
+                       deduplicar=True, umbral_duplicado=0.92):
     q = modelo.encode([PREFIJO_QUERY + texto_consulta], normalize_embeddings=True,
                        convert_to_numpy=True).astype("float32")
 
@@ -202,7 +247,8 @@ def procesar_consulta(query_id, texto_consulta, index, ruta_metadata, modelo,
                    for _, fid in candidatos}
 
         docs = agregar_a_documentos(candidatos, objetos, top_docs, metodo_agregacion)
-        fragmentos = construir_fragmentos(candidatos, objetos, top_fragmentos, max_palabras)
+        fragmentos = construir_fragmentos(candidatos, objetos, top_fragmentos, max_palabras,
+                                           deduplicar=deduplicar, umbral_duplicado=umbral_duplicado)
 
         if len(docs) >= top_docs and len(fragmentos) >= top_fragmentos:
             break
@@ -264,8 +310,9 @@ def validar_resultados(ruta_salida, n_esperado=50, max_palabras=250):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--indice", required=True, help="carpeta encoder_.../ con index.faiss y metadata.jsonl")
-    ap.add_argument("--consultas", required=True, help="archivo con las 50 consultas")
+    ap.add_argument("--indice", default="base_vectorial/encoder_multilingual-e5-small",
+                     help="carpeta encoder_.../ con index.faiss y metadata.jsonl")
+    ap.add_argument("--consultas", default="consultas.jsonl", help="archivo con las 50 consultas")
     ap.add_argument("--salida", default="resultados.jsonl")
     ap.add_argument("--modelo", default=MODELO_POR_DEFECTO)
     ap.add_argument("--device", default=None)
@@ -274,6 +321,10 @@ def main():
     ap.add_argument("--agregacion", choices=["max", "sum", "mean"], default="max",
                      help="estrategia de agregación de fragmentos a documento (Sección 8.6)")
     ap.add_argument("--max-palabras", type=int, default=250)
+    ap.add_argument("--sin-deduplicar", action="store_true",
+                     help="desactiva el filtro de fragmentos casi duplicados (Sección 8.7)")
+    ap.add_argument("--umbral-duplicado", type=float, default=0.92,
+                     help="similitud (0-1) a partir de la cual dos fragmentos se consideran duplicados")
     args = ap.parse_args()
 
     carpeta = Path(args.indice)
@@ -296,6 +347,7 @@ def main():
             c["query_id"], c["query"], index, ruta_metadata, modelo,
             k_inicial=args.k_inicial, k_maximo=args.k_maximo,
             metodo_agregacion=args.agregacion, max_palabras=args.max_palabras,
+            deduplicar=not args.sin_deduplicar, umbral_duplicado=args.umbral_duplicado,
         ))
 
     with open(args.salida, "w", encoding="utf-8") as f:
